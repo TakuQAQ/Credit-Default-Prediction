@@ -1,0 +1,160 @@
+---
+title: "LASSO"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(glmnet)
+library(glmnetUtils)
+```
+
+```{r}
+# Load clean numeric data
+credit = read_csv("credit_numeric.csv")
+```
+
+```{r}
+# Split train and test data set
+split = 0.8
+train_observe = 1:as.integer(nrow(credit)*split)
+train = credit[train_observe,]
+test = credit[-train_observe,]
+# We can test this split is reasonable by comparing the fraction of defaulters in train and test set
+train_default = sum(train$default_or_not)/nrow(train)
+test_default = sum(test$default_or_not)/nrow(test)
+print(c(train_default,test_default))
+# 29% in train and 30% in test, which are very close
+```
+
+```{r}
+set.seed(42)
+# Run LASSO regression on clean numeric train data set
+# LASSO selected variables
+lasso = cv.glmnet(default_or_not~., data=train, nfolds=10, alpha=1)
+lasso_coef = (coef(lasso, s=lasso$lambda.1se))[-1]
+lasso_index = which(lasso_coef!=0)
+
+train_lasso = train %>% select(-default_or_not)
+train_lasso = train_lasso[,lasso_index]
+train_lasso = tibble(train$default_or_not, train_lasso)
+colnames(train_lasso)[1] = "default"
+
+test_lasso = test %>% select(-default_or_not)
+test_lasso = test_lasso[,lasso_index]
+test_lasso = tibble(test$default_or_not, test_lasso)
+colnames(test_lasso)[1] = "default"
+
+credit_lasso = rbind(train_lasso,test_lasso)
+#write_csv("credit_lasso.csv") # Write LASSO selected variables into a new csv file named "credit_lasso"
+```
+
+```{r}
+# LASSO plot
+plot(lasso)
+```
+
+```{r}
+# Coefficients per lambda and per L1 plot
+op <- par(mfrow=c(1, 2))
+plot(lasso$glmnet.fit, "lambda", label=FALSE)
+plot(lasso$glmnet.fit, "norm",   label=FALSE)
+par(op)
+```
+
+- Reduce sample size and run LASSO again
+```{r}
+# 50% train samples
+set.seed(42)
+reduced = 0.5
+num_sample_train = as.integer(nrow(train)*reduced) 
+train_reduced = sample_n(train, num_sample_train)
+# LASSO selected variables
+lasso = cv.glmnet(default_or_not~., data=train_reduced, nfolds=10, alpha=1)
+lasso_coef = (coef(lasso, s=lasso$lambda.1se))[-1]
+lasso_index = which(lasso_coef!=0)
+# Number of variables LASSO selects
+length(lasso_index)
+```
+```{r}
+# 25% train samples
+set.seed(42)
+reduced = 0.25
+num_sample_train = as.integer(nrow(train)*reduced) 
+train_reduced = sample_n(train, num_sample_train)
+# LASSO selected variables
+lasso = cv.glmnet(default_or_not~., data=train_reduced, nfolds=10, alpha=1)
+lasso_coef = (coef(lasso, s=lasso$lambda.1se))[-1]
+lasso_index = which(lasso_coef!=0)
+# Number of variables LASSO selects
+length(lasso_index)
+```
+
+```{r}
+# 10% train samples
+set.seed(42)
+reduced = 0.1
+num_sample_train = as.integer(nrow(train)*reduced) 
+train_reduced = sample_n(train, num_sample_train)
+# LASSO selected variables
+lasso = cv.glmnet(default_or_not~., data=train_reduced, nfolds=10, alpha=1)
+lasso_coef = (coef(lasso, s=lasso$lambda.1se))[-1]
+lasso_index = which(lasso_coef!=0)
+# Number of variables LASSO selects
+length(lasso_index)
+# Coefficients per lambda and per L1 plot
+op <- par(mfrow=c(1, 2))
+plot(lasso$glmnet.fit, "lambda", label=FALSE)
+plot(lasso$glmnet.fit, "norm",   label=FALSE)
+par(op)
+```
+
+```{r}
+# 5% train samples
+set.seed(42)
+reduced = 0.05
+num_sample_train = as.integer(nrow(train)*reduced) 
+train_reduced = sample_n(train, num_sample_train)
+# LASSO selected variables
+lasso = cv.glmnet(default_or_not~., data=train_reduced, nfolds=10, alpha=1)
+lasso_coef = (coef(lasso, s=lasso$lambda.1se))[-1]
+lasso_index = which(lasso_coef!=0)
+# Number of variables LASSO selects
+length(lasso_index)
+```
+
+```{r}
+# 1% train samples
+set.seed(42)
+reduced = 0.01
+num_sample_train = as.integer(nrow(train)*reduced) 
+train_reduced = sample_n(train, num_sample_train)
+# LASSO selected variables
+lasso = cv.glmnet(default_or_not~., data=train_reduced, nfolds=10, alpha=1)
+lasso_coef = (coef(lasso, s=lasso$lambda.1se))[-1]
+lasso_index = which(lasso_coef!=0)
+# Number of variables LASSO selects
+length(lasso_index)
+# Coefficients per lambda and per L1 plot
+op <- par(mfrow=c(1, 2))
+plot(lasso$glmnet.fit, "lambda", label=FALSE)
+plot(lasso$glmnet.fit, "norm",   label=FALSE)
+par(op)
+# LASSO plot for 1% sample size
+plot(lasso)
+```
+
+```{r}
+# Number of LASSO selected variables decreases as we reduce sample size gradually
+sample_size<- c(0.01, 0.05, 0.1, 0.25, 0.5)
+lasso_variables<-c(10, 18, 39, 73, 115)
+data= data.frame(sample_size,lasso_variables)
+ggplot(data,aes(sample_size,lasso_variables))+
+  geom_point(size=2)+
+  geom_line(color=2,size=1)+
+  labs(x="Sample Size", y="Number of Selected Variables")
+```
+The intuition that the number of LASSO selected predictors decreases as sample size decreases is that it is more likely to over fit our train samples when the sample size is small, so LASSO would eliminate more predictors.
+
+
+
