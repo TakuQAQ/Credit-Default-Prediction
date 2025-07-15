@@ -1,0 +1,191 @@
+---
+title: "Decision Tree"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(glmnet)
+library(glmnetUtils)
+library(rpart)
+library(rpart.plot)
+library(pracma)
+library(caret)
+```
+
+```{r}
+# Load clean numeric data
+credit = read_csv("credit_numeric.csv")
+```
+
+```{r}
+# Split train and test data set
+split = 0.8
+train_observe = 1:as.integer(nrow(credit)*split)
+train = credit[train_observe,]
+test = credit[-train_observe,]
+# We can test this split is reasonable by comparing the fraction of defaulters in train and test set
+train_default = sum(train$default_or_not)/nrow(train)
+test_default = sum(test$default_or_not)/nrow(test)
+print(c(train_default,test_default))
+# 29% in train and 30% in test, which are very close
+```
+
+```{r}
+# LASSO selected variables
+lasso = cv.glmnet(default_or_not~., data=train, nfolds=10, alpha=1)
+lasso_coef = (coef(lasso, s=lasso$lambda.1se))[-1]
+lasso_index = which(lasso_coef!=0)
+
+train_lasso = train %>% select(-default_or_not)
+train_lasso = train_lasso[,lasso_index]
+train_lasso = tibble(train$default_or_not, train_lasso)
+colnames(train_lasso)[1] = "default"
+
+test_lasso = test %>% select(-default_or_not)
+test_lasso = test_lasso[,lasso_index]
+test_lasso = tibble(test$default_or_not, test_lasso)
+colnames(test_lasso)[1] = "default"
+```
+
+
+- Decision tree 
+```{r}
+# Decision tree training and split plot
+tree = rpart(default_or_not~., data=train, method="class")
+rpart.plot(tree)
+```
+
+```{r}
+# Decision tree prediction in sample and out of sample
+prediction_is = as_tibble(as.numeric(predict(tree, train, type="class")==1))
+prediction_oos = as_tibble(as.numeric(predict(tree, test, type="class")==1))
+```
+
+```{r}
+# Model performance
+
+# IS and OOS confusion matrix, true positive and false positive rate
+conf_matrix_is = table(train$default_or_not,prediction_is$value)
+conf_matrix_oos = table(test$default_or_not,prediction_oos$value)
+FP_is = conf_matrix_is[1,2]/sum(conf_matrix_is[1,])
+TP_is = conf_matrix_is[2,2]/sum(conf_matrix_is[2,])
+FP_oos = conf_matrix_oos[1,2]/sum(conf_matrix_oos[1,])
+TP_oos = conf_matrix_oos[2,2]/sum(conf_matrix_oos[2,])
+# IS and OOS accuracy
+accuracy_is = sum(diag(conf_matrix_is))/nrow(train)
+accuracy_oos = sum(diag(conf_matrix_oos))/nrow(test)
+# Print out the true and false positive rate of OOS prediction
+print(c(FP_oos,TP_oos))
+```
+
+```{r}
+# Exhibit default probability which can be used to plot ROC Curve 
+
+# Prediction by decision tree in the form of default probability 
+df = as_tibble(predict(tree,test,type="p"))
+# We build a function showing the true and false positive rate if we categorize those with default probability greater than threshold p as defaulters
+# The default tree classification in R categorizes those with default probability greater than p=50% as defaulters
+threshold_performance = function(p=0.5) {
+  conf_matrix_oos_p = table(test$default_or_not,df$`1`>p)
+  if (dim(conf_matrix_oos_p)[2]!=2 & colnames(conf_matrix_oos_p)[1]=="TRUE") {
+    conf_matrix_oos_p= cbind(c(0,0),conf_matrix_oos_p)
+  }
+  if (dim(conf_matrix_oos_p)[2]!=2 & colnames(conf_matrix_oos_p)[1]=="FALSE") {
+    conf_matrix_oos_p= cbind(conf_matrix_oos_p,c(0,0))
+  }
+  FP_p = conf_matrix_oos_p[1,2]/sum(conf_matrix_oos_p[1,])
+  TP_p = conf_matrix_oos_p[2,2]/sum(conf_matrix_oos_p[2,])
+  return(c(FP_p, TP_p))
+}
+```
+
+```{r, message=FALSE, warning=FALSE}
+# ROC curve with threshold points
+
+# Create data frame "performance" to record true and false positive rate under different thresholds
+threshold = sort(unique(df$`1`))
+performance = matrix(rep(1,2),1)
+for (i in 1:length(threshold)) {
+  performance = rbind(performance,threshold_performance(threshold[i]))
+}
+performance = as_tibble(performance)
+colnames(performance) = c("FP","TP")
+performance = performance %>% arrange(TP)
+
+# The 45 degree line starting from (0,0)  
+slope1 = function(x){
+  x
+}
+
+# ROC curve plot
+ggplot(data=performance,aes(FP,TP))+
+  geom_point(color=4,size=4)+
+  geom_smooth(color=2,size=1)+
+  geom_function(fun=slope1,color=1,size=1)+
+  geom_point(aes(FP_oos,TP_oos),color=7,size=4)
+
+# Area under curve (AUC)
+AUC = trapz(performance$FP,performance$TP)
+print(AUC)
+```
+The yellow point is the (FP,TP) under default 50% threshold used by the tree classification in R. Other blue points are the (FP,TP)s under different thresholds. We only have 5 unique values of default probability as exhibited in the data frame "df".
+
+```{r}
+# Sensitivity and specificity
+
+# Create data frame "ss" to record sensitivity and specificity under different thresholds
+ss = matrix(rep(0,2*(length(threshold)+1)),length(threshold)+1,2)
+ss[1,] = c(0,1)
+for (i in 1:length(threshold)){
+  ss[i+1,1] = specificity(factor(test$default_or_not),factor(as.integer(df$`1`>threshold[i])))
+  ss[i+1,2] = sensitivity(factor(test$default_or_not),factor(as.integer(df$`1`>threshold[i])))
+}
+ss[length(threshold)+1,] = c(1,0)
+ss = as_tibble(ss)
+colnames(ss) = c("Specificity", "Sensitivity")
+
+# Specificity v.s. Sensitivity plot
+ggplot(data=ss, aes(Specificity,Sensitivity))+
+  geom_point(color=1,size=2)+
+  geom_line(color=2,size=1)
+```
+
+
+
+- Combine decision tree and LASSO
+```{r}
+# Decision tree training with LASSO selected variables
+tree_lasso = rpart(default~., data=train_lasso, method="class")
+rpart.plot(tree_lasso)
+```
+
+```{r}
+# LASSO decision tree prediction
+prediction_is_lasso = as_tibble(as.numeric(predict(tree_lasso, train_lasso, type="class")==1))
+prediction_oos_lasso = as_tibble(as.numeric(predict(tree_lasso, test_lasso, type="class")==1))
+```
+
+```{r}
+# Model performance
+conf_matrix_is_lasso = table(train_lasso$default,prediction_is_lasso$value)
+conf_matrix_oos_lasso = table(test_lasso$default,prediction_oos_lasso$value)
+FP_is_lasso = conf_matrix_is_lasso[1,2]/sum(conf_matrix_is_lasso[1,])
+TP_is_lasso = conf_matrix_is_lasso[2,2]/sum(conf_matrix_is_lasso[2,])
+FP_oos_lasso = conf_matrix_oos_lasso[1,2]/sum(conf_matrix_oos_lasso[1,])
+TP_oos_lasso = conf_matrix_oos_lasso[2,2]/sum(conf_matrix_oos_lasso[2,])
+
+accuracy_is_lasso = sum(diag(conf_matrix_is_lasso))/nrow(train_lasso)
+accuracy_oos_lasso = sum(diag(conf_matrix_oos_lasso))/nrow(test_lasso)
+
+print(c(FP_oos_lasso,TP_oos_lasso))
+```
+
+```{r}
+# Summary
+summary(tree)
+summary(tree_lasso)
+```
+
+We get a very similar model when we use LASSO selected variables as predictors. The in-sample and out-of-sample prediction of two models are the same. The only difference is the change of predictors selected to split on. The reason is that there exist some predictors like the interest rate on loan (int_rate) and the number of payments on the loan (term) explain too well on the behavior of default so that these predictors dominate the split in every node.
+
